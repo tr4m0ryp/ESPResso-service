@@ -241,32 +241,18 @@ The unified prediction endpoint. Accepts product IDs, fetches data from Supabase
 
 **Response body:**
 
+Per-product predictions (carbon breakdown, confidence, model attribution) are written directly to Supabase -- they are not included in the HTTP response. The response contains only aggregate results:
+
 ```json
 {
-  "predictions": [
-    {
-      "product_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-      "carbon_kg_co2e": 12.47,
-      "components": {
-        "raw_materials": 5.23,
-        "transport": 2.81,
-        "processing": 3.14,
-        "packaging": 1.29
-      },
-      "confidence": 0.87,
-      "model_used": "A",
-      "is_rare": false,
-      "warnings": [],
-      "error": null
-    }
-  ],
   "summary": {
     "total_products": 2,
     "successful": 2,
     "failed": 0,
     "rare_count": 0,
     "avg_confidence": 0.87,
-    "processing_time_seconds": 1.234
+    "processing_time_seconds": 1.234,
+    "retried": 0
   },
   "failed_products": [],
   "db_write": {
@@ -278,10 +264,13 @@ The unified prediction endpoint. Accepts product IDs, fetches data from Supabase
 
 | Field | Description |
 |-------|-------------|
-| `predictions` | Per-product results with carbon breakdown, confidence, and model attribution |
-| `summary` | Aggregate statistics: total, successful, failed, rare count, average confidence, processing time |
-| `failed_products` | Products that failed prediction with reason strings |
+| `summary` | Aggregate statistics: total, successful, failed, rare count, average confidence, processing time, retry count |
+| `failed_products` | Products that failed prediction, each with `product_id` and `reason` |
 | `db_write` | Database write outcome (`null` if the write failed entirely) |
+
+**Per-product results (written to Supabase):**
+
+Each product's prediction is written to the `product_carbon_predictions` table with: `carbon_kg_co2e`, `components` (`raw_materials`, `transport`, `processing`, `packaging`), `confidence`, `model_used` (`"A"`, `"B"`, `"C"`, or `"none"`), `is_rare`, `warnings`, and `error`.
 
 ### Authentication
 
