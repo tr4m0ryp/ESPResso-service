@@ -1,0 +1,26 @@
+services:
+  espresso-service:
+    build:
+      context: .
+      target: production
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+    env_file:
+      - .env
+    environment:
+      - MODEL_A_PATH=artifacts/model_a.pkl
+      - MODEL_B_PATH=artifacts/model_b.pkl
+      - MODEL_C_PATH=artifacts/model_c.pkl
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8000/api/v1/health'); r.raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
