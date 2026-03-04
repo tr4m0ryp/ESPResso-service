@@ -18,12 +18,14 @@ class PredictionResult(BaseModel):
     """Prediction result for a single product."""
 
     product_id: str
-    carbon_kg_co2e: float = Field(
-        ..., description="Total carbon footprint in kg CO2e"
+    carbon_kg_co2e: Optional[float] = Field(
+        None, description="Total carbon footprint in kg CO2e (null if prediction failed)"
     )
-    components: CarbonComponents
-    confidence: float = Field(
-        ..., ge=0, le=1, description="Overall confidence score"
+    components: Optional[CarbonComponents] = Field(
+        None, description="Carbon component breakdown (null if prediction failed)"
+    )
+    confidence: Optional[float] = Field(
+        None, description="Overall confidence score (null if prediction failed)"
     )
     model_used: str = Field(..., description="Model that produced this result")
     is_rare: bool = Field(
@@ -44,6 +46,9 @@ class PredictionSummary(BaseModel):
     rare_count: int
     avg_confidence: float
     processing_time_seconds: float
+    retried: int = Field(
+        0, description="Number of products that needed at least one retry"
+    )
 
 
 class BatchPredictResponse(BaseModel):

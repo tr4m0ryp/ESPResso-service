@@ -145,6 +145,68 @@ class TestPredictEndpoint:
         )
         assert response.status_code in (404, 405)
 
+    @patch("app.supabase.client.SupabaseClient")
+    @patch("app.supabase.result_writer.write_predictions", new_callable=AsyncMock)
+    @patch("app.supabase.product_fetcher.fetch_products_for_prediction", new_callable=AsyncMock)
+    @patch("app.pipeline.orchestrator._run_pipeline")
+    def test_predict_with_null_failed_products(
+        self, mock_pipeline, mock_fetch, mock_write, mock_sb_cls,
+        client, mock_model_result,
+    ):
+        """Permanently failed products have null carbon values in response."""
+        from app.api.v1.schemas.response import (
+            BatchPredictResponse,
+            PredictionResult,
+            PredictionSummary,
+        )
+
+        products = _mock_products()
+        mock_fetch.return_value = products
+        mock_write.return_value = {"written": 1, "skipped": 0}
+        mock_sb_cls.return_value = AsyncMock()
+
+        # Simulate pipeline always failing for this product
+        async def always_fail(batch, *args, **kwargs):
+            return BatchPredictResponse(
+                predictions=[
+                    PredictionResult(
+                        product_id=p.product_id,
+                        carbon_kg_co2e=0.0,
+                        components=None,
+                        confidence=0.0,
+                        model_used="none",
+                        error="Model A prediction failed",
+                    )
+                    for p in batch
+                ],
+                summary=PredictionSummary(
+                    total_products=len(batch),
+                    successful=0,
+                    failed=len(batch),
+                    rare_count=0,
+                    avg_confidence=0.0,
+                    processing_time_seconds=0.01,
+                ),
+            )
+
+        mock_pipeline.side_effect = always_fail
+
+        response = client.post(
+            "/api/v1/predict",
+            json={"brand_id": "brand-1", "product_ids": ["p1"]},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        pred = data["predictions"][0]
+        assert pred["carbon_kg_co2e"] is None
+        assert pred["components"] is None
+        assert pred["confidence"] is None
+        assert pred["model_used"] == "none"
+        assert "failed after 3 attempts" in pred["error"]
+        assert data["summary"]["failed"] == 1
+        assert len(data["failed_products"]) == 1
+
 
 class TestHealthEndpoint:
     def test_health(self, client):

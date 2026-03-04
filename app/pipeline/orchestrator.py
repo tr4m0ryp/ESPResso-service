@@ -101,7 +101,95 @@ def _make_failed_result(
     )
 
 
+def _make_null_failed_result(
+    product: ProductInput,
+    error: str = "Prediction failed after 3 attempts",
+) -> PredictionResult:
+    """Create a result with null carbon values for permanently failed products."""
+    return PredictionResult(
+        product_id=product.product_id,
+        carbon_kg_co2e=None,
+        components=None,
+        confidence=None,
+        model_used="none",
+        is_rare=False,
+        error=error,
+    )
+
+
 async def run_batch_prediction(
+    products: list[ProductInput],
+    settings: Settings,
+    model_loader: ModelLoader,
+    nim_client: NIMClient,
+    cache: NormalizationCache,
+    confidence_threshold: float | None = None,
+    max_retries: int = 3,
+) -> BatchPredictResponse:
+    """Run batch prediction with retry for failed products.
+
+    Failed products are collected after each attempt and re-run through the
+    full pipeline (normalization + all models). After max_retries exhausted,
+    permanently failed products get null carbon values.
+    """
+    start = time.time()
+    pending: list[tuple[int, ProductInput]] = list(enumerate(products))
+    final: dict[int, PredictionResult] = {}
+    total_retried = 0
+    total_rare = 0
+
+    for attempt in range(1, max_retries + 1):
+        batch_products = [p for _, p in pending]
+        response = await _run_pipeline(
+            batch_products, settings, model_loader, nim_client, cache,
+            confidence_threshold,
+        )
+        total_rare += response.summary.rare_count
+
+        next_pending: list[tuple[int, ProductInput]] = []
+        for (orig_idx, product), result in zip(pending, response.predictions):
+            if not result.error:
+                final[orig_idx] = result
+            elif attempt < max_retries:
+                next_pending.append((orig_idx, product))
+            else:
+                final[orig_idx] = _make_null_failed_result(product)
+
+        if next_pending and attempt < max_retries:
+            total_retried += len(next_pending)
+            logger.warning(
+                "Retrying %d failed products (attempt %d/%d)",
+                len(next_pending), attempt + 1, max_retries,
+            )
+        pending = next_pending
+        if not pending:
+            break
+
+    elapsed = time.time() - start
+    ordered = [final[i] for i in range(len(products))]
+
+    successful = sum(1 for r in ordered if not r.error)
+    failed = len(ordered) - successful
+    total_confidence = sum(
+        r.confidence for r in ordered if r.confidence is not None and not r.error
+    )
+    avg_conf = total_confidence / successful if successful > 0 else 0.0
+
+    return BatchPredictResponse(
+        predictions=ordered,
+        summary=PredictionSummary(
+            total_products=len(products),
+            successful=successful,
+            failed=failed,
+            rare_count=total_rare,
+            avg_confidence=round(avg_conf, 4),
+            processing_time_seconds=round(elapsed, 3),
+            retried=total_retried,
+        ),
+    )
+
+
+async def _run_pipeline(
     products: list[ProductInput],
     settings: Settings,
     model_loader: ModelLoader,
