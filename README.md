@@ -1,5 +1,7 @@
 <div align="center">
   <h1>ESPResso Service</h1>
+  <p><strong>NOTE: This is V1 of the ESPResso Service. A new version is currently in development and will be published soon.</strong></p>
+  <hr>
   <p><strong>Carbon footprint prediction microservice for the Avelero Digital Product Passport platform</strong></p>
   <p>
     <a href="#getting-started"><img src="https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white" alt="Python"></a>
@@ -64,7 +66,11 @@ For the underlying model methodology -- LCA-phase generalization, synthetic data
 
 - **Rate-limit key rotation** -- Multiple NVIDIA NIM API keys can be configured for round-robin rotation with per-key 60-second cooldowns on 429 responses.
 
-- **Structured logging** -- All logging via structlog for machine-parseable output in production.
+- **HMAC brand authorization** -- Prediction requests are verified via `X-Brand-Id` and `X-Brand-Signature` headers signed by the Avelero backend, ensuring only authorized brands can trigger predictions.
+
+- **Per-IP rate limiting** -- Sliding window rate limiter with configurable request count and window size. Returns `429` with `Retry-After` and `X-RateLimit-*` headers. Health endpoints are exempt.
+
+- **Structured request logging** -- All requests and responses logged via structlog with contextvar-based correlation for machine-parseable output in production.
 
 - **Graceful degradation** -- Missing input fields produce warnings rather than errors; the pipeline applies sensible defaults so prediction proceeds with incomplete data.
 
@@ -89,6 +95,9 @@ espresso-service/
 |   |   +-- router.py                  # Top-level API router
 |   +-- middleware/
 |   |   +-- api_key_auth.py            # Bearer token authentication
+|   |   +-- brand_auth.py             # HMAC-based brand authorization
+|   |   +-- rate_limiter.py           # Per-IP sliding window rate limiter
+|   |   +-- request_logging.py        # Structured request/response logging
 |   +-- models/
 |   |   +-- loader.py                  # Model artifact loader (A, B, C)
 |   |   +-- predictor.py              # Batch prediction with error isolation
@@ -104,6 +113,7 @@ espresso-service/
 |   |   +-- orchestrator.py           # 6-phase batch pipeline coordinator
 |   |   +-- bulk_normalizer.py        # Collect, deduplicate, resolve, patch
 |   |   +-- data_mapper.py            # ProductInput -> ESPResso record dict
+|   |   +-- batch_utils.py            # Batch chunking utilities
 |   +-- supabase/
 |   |   +-- client.py                 # Supabase PostgREST client
 |   |   +-- product_fetcher.py        # Fetch product data for prediction
@@ -122,6 +132,9 @@ espresso-service/
 +-- scripts/
 |   +-- local_test.py                 # Interactive local testing (direct DB + models)
 |   +-- batch_predict.py              # CLI batch prediction via API
++-- docs/
+|   +-- AVELERO_CHANGES.md            # Avelero-specific integration notes
+|   +-- gcloud-deployment.md          # Google Cloud deployment guide
 +-- tests/                            # pytest test suite
 +-- Dockerfile                        # Multi-stage build (Python 3.12-slim)
 +-- docker-compose.yml                # Production service configuration
@@ -384,6 +397,12 @@ All configuration is loaded from environment variables (with `.env` file fallbac
 | `HOST` | Server bind address | yes | -- |
 | `PORT` | Server bind port | yes | -- |
 | `LOG_LEVEL` | Logging level (debug, info, warning, error) | yes | -- |
+| `ENVIRONMENT` | Runtime environment (`development` or `production`) | no | `development` |
+| `HMAC_SECRET` | Shared secret for HMAC brand signature verification | yes | -- |
+| `RATE_LIMIT_REQUESTS` | Max requests per IP per window | no | `100` |
+| `RATE_LIMIT_WINDOW_SECONDS` | Sliding window size in seconds | no | `60` |
+| `ALLOWED_ORIGINS` | Comma-separated CORS allowed origins | no | -- |
+| `HEALTH_REQUIRE_AUTH` | Whether health endpoint requires authentication | no | `false` |
 
 At least one of `NIM_API_KEY` or `NIM_API_KEYS` must be set. If both are provided, `NIM_API_KEYS` takes priority.
 
@@ -411,6 +430,12 @@ For development dependencies (pytest, etc.):
 
 ```bash
 pip install -e ".[dev]"
+```
+
+For `scripts/local_test.py` (direct PostgreSQL access):
+
+```bash
+pip install -e ".[dev,db]"
 ```
 
 Configure environment variables:
