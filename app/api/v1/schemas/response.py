@@ -73,11 +73,12 @@ class DbWriteResult(BaseModel):
 
 
 class PredictResponse(BaseModel):
-    """Response for the unified predict endpoint (fetch + predict + write)."""
+    """Response for the unified predict endpoint (fetch + predict + write).
 
-    predictions: list[PredictionResult] = Field(
-        ..., description="Full prediction results for each product"
-    )
+    Per-product predictions are written directly to Supabase.
+    This response only returns aggregate results.
+    """
+
     summary: PredictionSummary = Field(
         ..., description="Aggregate statistics"
     )

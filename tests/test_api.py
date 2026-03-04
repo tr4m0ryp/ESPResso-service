@@ -1,5 +1,8 @@
 """Integration tests for the unified /predict endpoint."""
 
+import hashlib
+import hmac
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +14,21 @@ from app.main import create_app
 from app.models.loader import ModelLoader
 from app.normalization.cache import NormalizationCache
 from app.normalization.nim_client import NIMClient
+
+HMAC_SECRET = "test-hmac-secret"
+
+
+def _sign_brand(brand_id: str, secret: str = HMAC_SECRET) -> dict:
+    """Generate X-Brand-Id and X-Brand-Signature headers for testing."""
+    ts = str(int(time.time()))
+    message = f"{brand_id}:{ts}"
+    digest = hmac.new(
+        secret.encode(), message.encode(), hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-Brand-Id": brand_id,
+        "X-Brand-Signature": f"{ts}:{digest}",
+    }
 
 
 @pytest.fixture
@@ -34,6 +52,7 @@ def mock_app(mock_model_result):
     app.state.cache = NormalizationCache(max_size=100, ttl=3600)
     app.state.settings = Settings(
         API_KEY="test-key",
+        HMAC_SECRET=HMAC_SECRET,
         SUPABASE_URL="https://test.supabase.co",
         SUPABASE_SERVICE_KEY="test-service-key",
     )
@@ -72,14 +91,15 @@ class TestPredictEndpoint:
         mock_sb_instance = AsyncMock()
         mock_sb_cls.return_value = mock_sb_instance
 
+        headers = {"Authorization": "Bearer test-key", **_sign_brand("brand-1")}
         response = client.post(
             "/api/v1/predict",
             json={"brand_id": "brand-1", "product_ids": ["p1"]},
-            headers={"Authorization": "Bearer test-key"},
+            headers=headers,
         )
         assert response.status_code == 200
         data = response.json()
-        assert "predictions" in data
+        assert "predictions" not in data
         assert "summary" in data
         assert "db_write" in data
         assert data["summary"]["total_products"] == 1
@@ -102,10 +122,11 @@ class TestPredictEndpoint:
         assert response.status_code in (401, 403)
 
     def test_predict_empty_product_ids(self, client):
+        headers = {"Authorization": "Bearer test-key", **_sign_brand("brand-1")}
         response = client.post(
             "/api/v1/predict",
             json={"brand_id": "brand-1", "product_ids": []},
-            headers={"Authorization": "Bearer test-key"},
+            headers=headers,
         )
         assert response.status_code == 422
 
@@ -117,22 +138,26 @@ class TestPredictEndpoint:
         mock_fetch.return_value = []
         mock_sb_cls.return_value = AsyncMock()
 
+        headers = {"Authorization": "Bearer test-key", **_sign_brand("brand-1")}
         response = client.post(
             "/api/v1/predict",
             json={"brand_id": "brand-1", "product_ids": ["nonexistent"]},
-            headers={"Authorization": "Bearer test-key"},
+            headers=headers,
         )
         assert response.status_code == 400
         assert "No valid products" in response.json()["detail"]
 
     def test_predict_supabase_not_configured(self, mock_app):
-        mock_app.state.settings = Settings(API_KEY="test-key")
+        mock_app.state.settings = Settings(
+            API_KEY="test-key", HMAC_SECRET=HMAC_SECRET,
+        )
         no_sb_client = TestClient(mock_app)
 
+        headers = {"Authorization": "Bearer test-key", **_sign_brand("brand-1")}
         response = no_sb_client.post(
             "/api/v1/predict",
             json={"brand_id": "brand-1", "product_ids": ["p1"]},
-            headers={"Authorization": "Bearer test-key"},
+            headers=headers,
         )
         assert response.status_code == 500
         assert "Supabase not configured" in response.json()["detail"]
@@ -165,7 +190,6 @@ class TestPredictEndpoint:
         mock_write.return_value = {"written": 1, "skipped": 0}
         mock_sb_cls.return_value = AsyncMock()
 
-        # Simulate pipeline always failing for this product
         async def always_fail(batch, *args, **kwargs):
             return BatchPredictResponse(
                 predictions=[
@@ -191,19 +215,15 @@ class TestPredictEndpoint:
 
         mock_pipeline.side_effect = always_fail
 
+        headers = {"Authorization": "Bearer test-key", **_sign_brand("brand-1")}
         response = client.post(
             "/api/v1/predict",
             json={"brand_id": "brand-1", "product_ids": ["p1"]},
-            headers={"Authorization": "Bearer test-key"},
+            headers=headers,
         )
         assert response.status_code == 200
         data = response.json()
-        pred = data["predictions"][0]
-        assert pred["carbon_kg_co2e"] is None
-        assert pred["components"] is None
-        assert pred["confidence"] is None
-        assert pred["model_used"] == "none"
-        assert "failed after 3 attempts" in pred["error"]
+        assert "predictions" not in data
         assert data["summary"]["failed"] == 1
         assert len(data["failed_products"]) == 1
 

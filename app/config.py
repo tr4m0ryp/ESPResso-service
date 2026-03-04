@@ -10,6 +10,14 @@ class Settings(BaseSettings):
     # Authentication
     API_KEY: str
 
+    # Security
+    ENVIRONMENT: str = "development"
+    HMAC_SECRET: str = ""
+    RATE_LIMIT_REQUESTS: int = 100
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
+    ALLOWED_ORIGINS: str = ""
+    HEALTH_REQUIRE_AUTH: bool = False
+
     # NVIDIA NIM
     NIM_API_KEY: str = ""
     NIM_API_KEYS: str = ""
@@ -48,6 +56,19 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _require_hmac_in_production(self) -> "Settings":
+        if self.ENVIRONMENT == "production" and not self.HMAC_SECRET:
+            raise ValueError(
+                "HMAC_SECRET is required when ENVIRONMENT=production"
+            )
+        return self
+
+    @property
+    def is_production(self) -> bool:
+        """True when running in production environment."""
+        return self.ENVIRONMENT == "production"
+
     @property
     def nim_api_key_list(self) -> list[str]:
         """Parse all configured NIM API keys into a list.
@@ -57,6 +78,13 @@ class Settings(BaseSettings):
         if self.NIM_API_KEYS:
             return [k.strip() for k in self.NIM_API_KEYS.split(",") if k.strip()]
         return [self.NIM_API_KEY]
+
+    @property
+    def allowed_origin_list(self) -> list[str]:
+        """Parse ALLOWED_ORIGINS into a list of origin strings."""
+        if not self.ALLOWED_ORIGINS:
+            return []
+        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
 
     model_config = {
         "env_file": ".env",

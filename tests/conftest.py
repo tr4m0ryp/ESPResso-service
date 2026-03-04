@@ -16,6 +16,7 @@ def settings():
         API_KEY="test-key",
         NIM_API_KEY="test-nim-key",
         RARITY_CONFIDENCE_THRESHOLD=0.6,
+        HMAC_SECRET="test-hmac-secret",
     )
 
 

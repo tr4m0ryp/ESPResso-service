@@ -1,7 +1,7 @@
 """Prediction endpoint.
 
 POST /api/v1/predict -- accepts product IDs, fetches from Supabase, predicts,
-writes results back, and returns full predictions with summary.
+writes results back, and returns summary only.
 """
 
 import logging
@@ -17,7 +17,7 @@ from app.api.v1.schemas import (
     PredictResponse,
 )
 from app.config import Settings
-from app.middleware.api_key_auth import verify_api_key
+from app.middleware.brand_auth import verify_brand_authorization
 from app.models.loader import ModelLoader
 from app.normalization.cache import NormalizationCache
 from app.normalization.nim_client import NIMClient
@@ -31,10 +31,10 @@ router = APIRouter()
 @router.post(
     "/predict",
     response_model=PredictResponse,
-    dependencies=[Depends(verify_api_key)],
 )
 async def predict(
     request: PredictRequest,
+    verified_brand_id: str = Depends(verify_brand_authorization),
     settings: Settings = Depends(get_settings),
     model_loader: ModelLoader = Depends(get_model_loader),
     nim_client: NIMClient = Depends(get_nim_client),
@@ -43,8 +43,15 @@ async def predict(
     """Fetch product data from Supabase, predict, and write results back.
 
     Full cycle: fetch -> predict -> write -> respond.
-    Returns full predictions, summary, failed list, and DB write result.
+    Returns summary, failed list, and DB write result.
     """
+    # Prevent body/header brand_id mismatch
+    if request.brand_id != verified_brand_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="brand_id in request body does not match authorized brand",
+        )
+
     start = time.time()
 
     if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
@@ -139,7 +146,6 @@ async def _run_predict_cycle(
 
     elapsed = time.time() - start
     return PredictResponse(
-        predictions=batch_response.predictions,
         summary=batch_response.summary,
         failed_products=failed_products,
         db_write=db_write,
